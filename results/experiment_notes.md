@@ -130,6 +130,16 @@ Bluetooth run metrics (all STABLE, e2e ~39 ms vs 26 ms wired): 0 overruns,
 0 underruns, 0 gaps across ~100 s runs; render proc avg ~70-90 us, max
 < 670 us; the A2DP stream stayed solid throughout.
 
+### Listening verification (the human check)
+
+Operator report (buds in ears, 60 s run, 5 s tone / 5 s silence x 6):
+cancel windows = **dead silence**. The contrast is perceived mainly as the
+tone switching off (a 200 Hz tone on small earbuds is a soft hum, not a
+loud blare). Audible clicks at every transition are expected: the output
+jumps between a sine at an arbitrary phase and exact zeros. This closes
+the loop - what the electrical proof promises (digital silence on the
+wire) is what the ears hear.
+
 ## Phase 2 - acoustic loopback latency (pending: needs earphones)
 
 Setup: earphones plugged, earphone held a few cm from the built-in mic,
@@ -203,13 +213,33 @@ Expectation for this platform: a deep, stable null is plausible at 200 Hz
 because the tone is steady and the loop delay only sets a required phase
 offset. Wideband noise in the same loop is hopeless (see Phase 3 table).
 
-## Phase 5 - conclusions (to finalize after Phases 2/4)
+## Phase 5 - conclusions (2026-10-18)
 
-- Software pipeline latency (~26 ms) dwarfs the acoustic path (< 1 ms) on
-  this machine: `dp << ds`, so broadband feedforward ANC is physically out
-  of reach with this software-only stack, regardless of algorithm.
-- Narrowband cancellation remains possible; the experiment's job is to
-  quantify how deep and how stable that null is in a real room with the
-  earphone/microphone geometry available.
-- The measured numbers (Phase 2 delay, Phase 4 attenuation) determine the
-  honest headline for this project.
+Final results on this hardware (laptop Realtek mic + pTron TWS over A2DP):
+
+- Narrowband (200 Hz) cancellation: **achieved and verified three ways**.
+  - Electrical: cancel windows are bit-level digital silence on the wire
+    (148-292 dB below the tone; `results/narrowband_out.wav`).
+  - Acoustic (laptop mic, raw capture): >= 11.9 dB at the mic after the
+    phase sweep found the null unaided; the depth is limited by the
+    room's 200 Hz ambient floor, not by the system (the null lands below
+    what the mic can resolve).
+  - Audible (buds in the operator's ears): cancel windows are dead
+    silence; transitions click (instant switching at a random phase).
+- Stability: 60-100 s sessions over Bluetooth with 0 overruns/underruns/
+  gaps; software e2e ~26 ms wired, ~39-42 ms over Bluetooth.
+- Why broadband ANC is out of reach here: software pipeline delay
+  (~26 ms) dwarfs acoustic propagation (< 1 ms), so `dp << ds`; the FxLMS
+  simulation shows the controller destabilizes once the causality budget
+  is violated (`experiments/simulated_fxlms.py`).
+- Why narrowband nevertheless works: for a steady tone the loop delay is
+  just phase, which the sweep absorbs. The two obstacles found on the way
+  were measurement and actuation, not control theory: Windows capture
+  effects suppressed the stationary tone ~33 dB (solved with raw mode),
+  and an unsealed earbud radiates 200 Hz weakly (limiting the at-mic
+  measurement; the at-ear result is unaffected because the drive and
+  cancel tones come from the same driver).
+- Honest headline: with a software-only laptop stack, a deep, stable,
+  audible null is achievable for steady narrowband tones (<= ~300 Hz
+  class) even over Bluetooth; broadband attenuation is not feasible with
+  this latency budget.

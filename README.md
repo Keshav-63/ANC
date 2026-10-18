@@ -17,8 +17,8 @@ is the working map. Measured results and the experiment log are in
 | 1 - duplex pass-through (latency, dropouts) | `audio_passthrough` | done on this machine |
 | 2 - latency measurement + acoustic cross-check | `audio_passthrough --mode loopback` + `experiments/analyze_latency.py` | analyzer self-tested; acoustic run pending earphones |
 | 3 - DSP sandbox + unit tests | `dsp_sandbox`, `anc_tests`, `experiments/selftest_analyzers.py`, `simulated_fxlms.py` | done |
-| 4 - narrowband cancellation experiment | `narrowband_experiment` + `experiments/analyze_spectrum.py` | analyzer self-tested; acoustic run pending earphones |
-| 5 - interpretation / conclusions | `results/experiment_notes.md` | template in place |
+| 4 - narrowband cancellation experiment | `narrowband_experiment` + `experiments/analyze_spectrum.py` | done: null found, electrical + mic + listening verified over Bluetooth (2026-10-18) |
+| 5 - interpretation / conclusions | `results/experiment_notes.md` | written 2026-10-18 |
 
 ## Build
 
@@ -117,10 +117,24 @@ The `narrowband_experiment` tool drives a 200 Hz tone, sweeps the cancel
 phase to find the null, then alternates baseline/cancel windows.
 
 ```powershell
-build\Release\narrowband_experiment.exe --experiment drive_cancel --freq 200
+build\Release\narrowband_experiment.exe --experiment drive_cancel --freq 200 ^
+    --capture-raw
 python experiments\analyze_spectrum.py --windows results/narrowband_windows.csv ^
     --mic results/narrowband_mic.wav
+python experiments\analyze_spectrum.py --mic results/narrowband_out.wav ^
+    --summary results/spectrum_summary_out.csv
 ```
+
+`--capture-raw` is required on Windows laptops: the default capture path
+("microphone enhancements": noise suppression/high-pass) removes ~33 dB
+from a stationary tone. The second analyzer call verifies the *electrical*
+cancellation from the recorded render stream (`narrowband_out.wav`).
+
+Verified on 2026-10-18 (pTron TWS over Bluetooth, laptop mic, raw capture):
+the sweep finds phase 0 deg unaided; cancel windows are bit-level digital
+silence on the wire (148-292 dB below the tone); the at-mic null is
+floor-limited (>= 11.9 dB measured); and the listening check confirms the
+cancel windows are dead silent in the earbuds.
 
 - `--experiment tracked_cancel` replaces the phase sweep with an adaptive
   quadrature tracker (`--cancel-gain`, default 0.5).

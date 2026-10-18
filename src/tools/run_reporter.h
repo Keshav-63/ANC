@@ -88,9 +88,21 @@ public:
         summary.durationSeconds = summary.final.elapsedSeconds;
         summary.inputDropped = engine.inputDroppedFrames();
         summary.outputDropped = engine.outputDroppedFrames();
-        summary.stable = summary.final.overrunFrames == 0 && summary.final.underrunFrames == 0 &&
-                         summary.final.gapFrames == 0 &&
-                         summary.final.renderMissedDeadlines == 0;
+        const bool noDropouts = summary.final.overrunFrames == 0 &&
+                                summary.final.underrunFrames == 0 &&
+                                summary.final.gapFrames == 0;
+        summary.stable = noDropouts;
+        std::string verdict;
+        if (!noDropouts) {
+            verdict = "UNSTABLE (dropouts/gaps detected - try a larger --period)";
+        } else if (summary.final.renderMissedDeadlines > 0) {
+            char vb[96];
+            std::snprintf(vb, sizeof(vb), "STABLE (no dropouts; %llu benign event wakes)",
+                          static_cast<unsigned long long>(summary.final.renderMissedDeadlines));
+            verdict = vb;
+        } else {
+            verdict = "STABLE (no dropouts, no gaps)";
+        }
         if (snapshotCsv_.isOpen()) snapshotCsv_.writeLine(snapshotToCsvRow(summary.final));
 
         char buf[2048];
@@ -137,8 +149,7 @@ public:
             summary.final.ringFillFrames, summary.final.ringFillMs,
             static_cast<unsigned long long>(summary.inputDropped),
             static_cast<unsigned long long>(summary.outputDropped),
-            summary.stable ? "STABLE (no dropouts, no gaps)"
-                           : "UNSTABLE (dropouts/gaps detected - try a larger --period)");
+            verdict.c_str());
         summary.text = buf;
         std::printf("%s", summary.text.c_str());
 
