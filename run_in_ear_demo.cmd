@@ -21,9 +21,9 @@ REM  being cancelled at your eardrum, generated live from the mic input.
 REM
 REM  USAGE:   run_in_ear_demo.cmd
 REM  TUNED VALUES (found by listening, see results/experiment_notes.md):
-REM    freq 450 Hz (this room is silent there), anti-tone level 0.05
-REM    (--cancel-gain 2.5), phase trim 0 deg (null sits near 0/180; the
-REM    earbud driver inverts phase at 450 Hz).
+REM    freq 450 Hz (this room is silent there), anti-tone level ~0.05
+REM    (--cancel-gain 4.5 x the measured mic level), phase trim 0 deg (null
+REM    sits near 0/180; the earbud driver inverts phase at 450 Hz).
 REM ============================================================================
 setlocal
 cd /d "%~dp0"
@@ -51,9 +51,10 @@ start "ANC noise source (closes by itself)" ^
     --windows-csv results\src_windows.csv
 
 REM --- the loop: mic -> track -> anti-noise -> earbud -----------------------
-timeout /t 10 /nobreak >nul
+REM (Start-Sleep, not "timeout": timeout fails when stdout is redirected)
+powershell -NoProfile -Command "Start-Sleep -Seconds 10"
 build\Release\narrowband_experiment.exe --experiment tracked_cancel --freq 450 ^
-    --cancel-gain 2.5 --tracked-phase-trim 0 --cycles 2 --window-sec 10 --warmup 1 ^
+    --cancel-gain 4.5 --tracked-phase-trim 0 --cycles 2 --window-sec 10 --warmup 1 ^
     --capture-raw --capture-device "Microphone Array" --render-device "pTron" ^
     --record-input results\in_ear_mic.wav --record-output results\in_ear_out.wav ^
     --windows-csv results\in_ear_windows.csv
