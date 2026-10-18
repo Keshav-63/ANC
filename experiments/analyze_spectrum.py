@@ -130,7 +130,8 @@ def print_sweep(results: list[dict]) -> None:
 
 def print_pairs(results: list[dict]) -> None:
     baselines = [r for r in results if r["label"] == "baseline"]
-    cancels = [r for r in results if r["label"] == "cancel" and r["mode"].endswith("Cancel")]
+    cancels = [r for r in results
+               if r["label"] == "cancel" and "cancel" in r["mode"].lower()]
     if not baselines or not cancels:
         return
     pairs = min(len(baselines), len(cancels))

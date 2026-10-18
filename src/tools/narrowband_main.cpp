@@ -113,6 +113,7 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
     options.periodFrames = static_cast<uint32_t>(args.getInt(L"--period", 0));
+    options.captureRaw = args.has(L"--capture-raw");
     options.recordInputPath = args.get(L"--record-input", L"results/narrowband_mic.wav");
     options.recordOutputPath = args.get(L"--record-output", L"results/narrowband_out.wav");
 
@@ -128,6 +129,7 @@ int wmain(int argc, wchar_t** argv) {
                     toUtf8(plan.captureDeviceName).c_str(), plan.captureFormat.describe().c_str(),
                     toUtf8(plan.renderDeviceName).c_str(), plan.renderFormat.describe().c_str(),
                     plan.periodFrames);
+        if (!plan.notes.empty()) std::printf("%s", plan.notes.c_str());
         engine.setProcessor(&processor);
 
         CsvLogger windowsCsv;
@@ -165,6 +167,10 @@ int wmain(int argc, wchar_t** argv) {
                 processor.setCancelPhaseDeg(phaseDeg);
             }
             processor.setMode(mode);
+            // Give the audio thread a few blocks with the new mode so the
+            // first readout sample below is not the tail of the previous
+            // window (it would stale-bias peak and residual measurements).
+            Sleep(50);
 
             double magSum = 0.0;
             double peak = 0.0;

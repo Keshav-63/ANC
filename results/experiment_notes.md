@@ -62,6 +62,74 @@ Note: the audible (unmuted) pass-through still needs a listening check by a
 human (clicks/dropouts/feedback). Feedback is the main hazard - use `--mute`
 first, then earphones.
 
+## Bluetooth live-demo session (2026-10-18, pTron TWS)
+
+Configs tried: capture + render both Bluetooth, and laptop mic + Bluetooth
+render. Findings:
+
+- **TWS "Headset" mic cannot serve as the error sensor for 200 Hz**: the
+  Bluetooth mic measures the bud output 20-40 dB down and high-pass
+  filtered (residuals -63 to -89 dBFS, no phase pattern) - the sweep found
+  a noise minimum, not a null. Use the laptop mic; keep the earbuds as the
+  output being listened to (both buds play the same signal, so the null
+  heard and the null measured are the same one).
+- **A2DP endpoint rejected `IAudioClient3::InitializeSharedAudioStream`**
+  with `AUDCLNT_E_INVALID_STREAM_FLAG` (transient, after an HFP session).
+  Fixed with an automatic classic-shared-mode fallback in
+  `wasapi_streams.cpp` (and the same fallback for capture).
+- **The Realtek laptop mic was delivering digital zeros** during the wired-
+  mic run (residual readout pinned at -300 dBFS; a 3 s mic recording was
+  bit-exact silent: rms 0.000e+00). OS/hardware mute - not a software bug.
+  Diagnostics: Sound settings level bar, mic-mute F-key, privacy toggles.
+
+### RAW capture is mandatory (Windows effects suppress the tone)
+
+After the mic was unmuted, the same 0.2-amplitude drive tone measured
+**-91.4 dBFS** through the default ("enhanced") capture path but **-58.9
+dBFS** with `AUDCLNT_STREAMOPTIONS_RAW` (effects bypassed) - the OS/Realtek
+APO chain (noise suppression / high-pass) removes ~33 dB from a stationary
+200 Hz tone. `narrowband_experiment.exe` now takes `--capture-raw`, and it
+prints the engine `plan.notes` so raw/fallback status is visible. Room
+floor at 200 Hz: raw -71.5 dBFS vs enhanced -95.2 dBFS (4 s muted
+recordings, `results/mic_floor_raw.wav` / `mic_floor_normal.wav`).
+
+### Electrical ground truth from the recorded render stream
+
+`--record-output results/narrowband_out.wav` captures what actually goes to
+the Bluetooth link; lock-in analysis of that file is the cleanest
+verification available (`analyze_spectrum.py --mic results/narrowband_out.wav`):
+
+- phase-sweep amplitudes match theory `2G|sin(phi/2)|` to 0.01 dB
+  (-7.96 dBFS at 180 deg down to digital silence at 0 deg);
+- every cancel window at the best phase transmitted **digital silence**
+  (-156 to -300 dBFS) = 148-292 dB electrical cancellation.
+
+The tool picked phase 0 deg by itself (from the mic) - the true null.
+
+### Readout race in the harness (fixed)
+
+The first per-window sample could read the *previous* window's last audio
+block, so cancel windows printed a stale `peak 0.200` and sweep peaks
+showed a one-window "lag". A 50 ms settle before the sampling loop fixed
+it: cancel windows now print `peak 0.000`, verdicts read STABLE, and the
+summary prints `render missed deadline` (it explains otherwise-mysterious
+UNSTABLE verdicts caused by benign event wakes).
+
+### Microphone-side acoustic numbers (floor-limited)
+
+Best run (RAW capture, bud near the mic): mic lock-in at 180 deg =
+-61.0 dBFS vs 0 deg = -72.9 dBFS -> **11.9 dB reduction at the laptop
+mic**, floored by the ambient 200 Hz noise (-71.5 dBFS). Repeated runs
+measured only the floor (no tone/silence pattern) whenever the bud was not
+at the mic. An unsealed earbud radiates 200 Hz weakly (the driver needs
+ear-seal volume loading), so the at-mic number is a lower bound: the null
+is deeper than the room floor can resolve. The at-ear cancellation equals
+the electrical one - the buds receive digital zeros during cancel windows.
+
+Bluetooth run metrics (all STABLE, e2e ~39 ms vs 26 ms wired): 0 overruns,
+0 underruns, 0 gaps across ~100 s runs; render proc avg ~70-90 us, max
+< 670 us; the A2DP stream stayed solid throughout.
+
 ## Phase 2 - acoustic loopback latency (pending: needs earphones)
 
 Setup: earphones plugged, earphone held a few cm from the built-in mic,
@@ -115,13 +183,21 @@ python experiments\analyze_spectrum.py --windows results/narrowband_windows.csv 
     --mic results/narrowband_mic.wav
 ```
 
-Record here after the run:
+Recorded (2026-10-18, pTron TWS output + laptop mic, `--capture-raw`):
 
-- best cancel phase from sweep: __ deg (processor) / __ deg (mic-verified)
-- baseline vs cancel residual (processor readout): __ dBFS -> __ dBFS
-- attenuation (mic-verified): __ dB; mic vs processor cross-check: __ dB
-- safety watchdog trips: yes/no
-- notes: __
+- best cancel phase from sweep: 0 deg (processor) / 0 deg (mic-verified)
+- baseline vs cancel residual (processor readout): -57.3 dBFS -> -57.7
+  dBFS (floor-limited; the at-mic tone is weak relative to ambient 200 Hz)
+- attenuation (mic-verified): 11.9 dB in the best sweep run (the null sits
+  at the room floor, so the true depth is >= this); electrical attenuation
+  measured on the render stream: 148-292 dB (cancel windows are digital
+  silence)
+- mic vs processor cross-check: both floor-limited and flat in the
+  no-sweep repeats; use the output-stream analysis for the electrical
+  number and the sweep windows for the acoustic one
+- safety watchdog trips: no
+- notes: always run with `--capture-raw` (see Bluetooth section); analyze
+  both `results/narrowband_mic.wav` and `results/narrowband_out.wav`.
 
 Expectation for this platform: a deep, stable null is plausible at 200 Hz
 because the tone is steady and the loop delay only sets a required phase

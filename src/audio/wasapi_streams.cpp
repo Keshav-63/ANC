@@ -357,10 +357,29 @@ bool DuplexEngine::tryOpenRender(uint32_t periodFrames, std::string& errorOut) {
     ComPtr<IAudioClient3> client3;
     const bool haveClient3 = SUCCEEDED(client.As(&client3)) && client3;
 
-    if (haveClient3 && periodFrames > 0) {
+    bool useLegacy = !(haveClient3 && periodFrames > 0);
+    if (!useLegacy) {
         hr = client3->InitializeSharedAudioStream(flags, periodFrames, plan_.renderFormat.p(),
                                                   nullptr);
-    } else {
+        if (FAILED(hr)) {
+            // Some drivers (notably Bluetooth A2DP endpoints) reject the
+            // IAudioClient3 period path with AUDCLNT_E_INVALID_STREAM_FLAG.
+            // Fall back to classic shared mode and put the capture stream on
+            // the same path (periodFrames == 0) for consistency.
+            plan_.notes += "render: IAudioClient3 period init rejected (" + hrToString(hr) +
+                           "); using classic shared mode\n";
+            plan_.periodFrames = 0;
+            useLegacy = true;
+            client.Reset();
+            client3.Reset();
+            hr = renderDevice_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client);
+            if (FAILED(hr)) {
+                errorOut = "Activate: " + hrToString(hr);
+                return false;
+            }
+        }
+    }
+    if (useLegacy) {
         REFERENCE_TIME def = 0, min = 0;
         client->GetDevicePeriod(&def, &min);
         const REFERENCE_TIME duration = min > 0 ? min * 2 : 200000;  // 2 x min, fallback 20 ms
@@ -394,9 +413,24 @@ bool DuplexEngine::tryOpenCapture(const Options& options, uint32_t periodFrames,
     ComPtr<IAudioClient3> client3;
     const bool haveClient3 = SUCCEEDED(client.As(&client3)) && client3;
 
-    if (haveClient3 && periodFrames > 0) {
+    bool useLegacy = !(haveClient3 && periodFrames > 0);
+    if (!useLegacy) {
         hr = client3->InitializeSharedAudioStream(flags, periodFrames, format.p(), nullptr);
-    } else {
+        if (FAILED(hr)) {
+            plan_.notes += "capture: IAudioClient3 period init rejected (" + hrToString(hr) +
+                           "); using classic shared mode\n";
+            useLegacy = true;
+            client.Reset();
+            client3.Reset();
+            hr = captureDevice_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client);
+            if (FAILED(hr)) {
+                errorOut = "Activate: " + hrToString(hr);
+                return false;
+            }
+            setRawMode(client.Get(), raw);
+        }
+    }
+    if (useLegacy) {
         REFERENCE_TIME def = 0, min = 0;
         client->GetDevicePeriod(&def, &min);
         const REFERENCE_TIME duration = min > 0 ? min * 2 : 200000;

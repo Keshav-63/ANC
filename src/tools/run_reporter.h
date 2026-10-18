@@ -105,6 +105,7 @@ public:
             "overrun frames        : %llu\n"
             "underrun frames       : %llu (post-warmup)\n"
             "warmup underruns      : %llu\n"
+            "render missed deadline: %llu (event wake with no free space; benign if tiny)\n"
             "position gaps         : %llu frames\n"
             "discontinuities       : %llu\n"
             "clipped frames        : %llu\n"
@@ -123,6 +124,7 @@ public:
             static_cast<unsigned long long>(summary.final.overrunFrames),
             static_cast<unsigned long long>(summary.final.underrunFrames),
             static_cast<unsigned long long>(summary.final.warmupUnderrunFrames),
+            static_cast<unsigned long long>(summary.final.renderMissedDeadlines),
             static_cast<unsigned long long>(summary.final.gapFrames),
             static_cast<unsigned long long>(summary.final.discontinuities),
             static_cast<unsigned long long>(summary.final.clipFrames),
