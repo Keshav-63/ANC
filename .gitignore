@@ -1,0 +1,17 @@
+build/
+out/
+.vs/
+*.user
+*.suo
+__pycache__/
+*.pyc
+
+# Generated experiment artifacts (keep the notes template)
+results/**/*.wav
+results/**/*.png
+results/**/*.csv
+results/**/*.txt
+results/**/*.json
+results/selftest/
+!results/experiment_notes.md
+!results/.gitkeep
