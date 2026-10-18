@@ -17,6 +17,8 @@
 
 #include <windows.h>
 
+#include <conio.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -81,7 +83,10 @@ int wmain(int argc, wchar_t** argv) {
     const double frequency = args.getDouble(L"--freq", 200.0);
     const float driveGain = args.getFloat(L"--drive-gain", 0.2f);
     const float cancelGain = args.getFloat(
-        L"--cancel-gain", experiment == L"tracked_cancel" ? 0.5f : driveGain);
+        L"--cancel-gain",
+        experiment == L"tracked_cancel"    ? 0.5f
+        : experiment == L"interactive"     ? 150.0f
+                                           : driveGain);
     const double windowSeconds = args.getDouble(L"--window-sec", 5.0);
     const int cycles = args.getInt(L"--cycles", 6);
     const bool sweepEnabled = !args.has(L"--no-sweep");
@@ -242,7 +247,146 @@ int wmain(int argc, wchar_t** argv) {
 
         // --- run the schedule ----------------------------------------------
         double bestPhase = initialPhaseDeg;
-        if (driveCancel) {
+        if (experiment == L"interactive") {
+            // ------------------------------------------------------------------
+            // Interactive mode: the room's own noise is the input - no test
+            // tone is generated anywhere. The tool first listens to find the
+            // room's dominant steady tone, then tracks it and emits the
+            // matching anti-noise. S toggles cancellation on/off, Q quits.
+            // The null exists at the error microphone, so listen there (an
+            // earbud held at the microphone is the actuator and the sensor
+            // point at once).
+            // ------------------------------------------------------------------
+            std::printf(
+                "\ninteractive mode - no test tone is played\n"
+                "  S = toggle cancellation,  Q = quit\n"
+                "  listening for the room's dominant steady tone ...\n\n");
+
+            static const double kCandidates[] = {60, 100, 150, 200, 250, 300,
+                                                 350, 400, 500, 600};
+            double bestFreq = frequency;
+            double bestMag = -1.0;
+            for (const double f : kCandidates) {
+                processor.setFrequency(f);
+                Sleep(700);
+                const double mag = processor.residualMagnitude();
+                if (mag > bestMag) {
+                    bestMag = mag;
+                    bestFreq = f;
+                }
+            }
+            processor.setFrequency(bestFreq);
+            Sleep(500);
+            std::printf("room tone: %.0f Hz at %.1f dBFS\n", bestFreq,
+                        20.0 * std::log10(std::max(bestMag, 1e-12)));
+            std::printf("press S to start cancelling it, Q to quit\n\n");
+            std::fflush(stdout);
+
+            bool active = false;
+            double lockedTrim = trackedTrimDeg;
+            double offSum = 0.0;
+            double onSum = 0.0;
+            int offCount = 0;
+            int onCount = 0;
+            int64_t lastAnchor = qpcTicks();
+            int64_t startedAt = qpcTicks();
+            int64_t lastPrint = qpcTicks();
+            processor.setMode(Mode::Off);
+
+            while (!g_stop.load()) {
+                if (_kbhit()) {
+                    const int key = _getch();
+                    if (key == 'q' || key == 'Q' || key == 27) {
+                        break;
+                    }
+                    if (key == 's' || key == 'S') {
+                        active = !active;
+                        if (active) {
+                            processor.setTrackedTrimDeg(lockedTrim);
+                            processor.setMode(Mode::TrackedCancel);
+                            onSum = 0.0;
+                            onCount = 0;
+                        } else {
+                            processor.setMode(Mode::Off);
+                            offSum = 0.0;
+                            offCount = 0;
+                        }
+                        std::printf("[%6.1fs] cancellation %s\n",
+                                    ticksToSeconds(qpcTicks() - startedAt),
+                                    active ? "ON" : "OFF");
+                        std::fflush(stdout);
+                    }
+                }
+
+                const double db = 20.0 * std::log10(std::max(processor.residualMagnitude(), 1e-12));
+                if (active) {
+                    onSum += db;
+                    ++onCount;
+                } else {
+                    offSum += db;
+                    ++offCount;
+                }
+
+                // Re-anchor the emission phase periodically: the loop delay
+                // drifts (independent capture/render clocks) and the null has
+                // to be re-found to stay deep.
+                if (active && ticksToSeconds(qpcTicks() - lastAnchor) > 8.0) {
+                    const double center = lockedTrim;
+                    double anchorBest = 1e30;
+                    double anchorPhase = center;
+                    for (int step = 0; step < 5; ++step) {
+                        const double phase = center - 30.0 + 15.0 * step;
+                        processor.setTrackedTrimDeg(phase);
+                        Sleep(300);
+                        const double r = processor.residualDbfs();
+                        if (r < anchorBest) {
+                            anchorBest = r;
+                            anchorPhase = phase;
+                        }
+                    }
+                    lockedTrim = anchorPhase;
+                    processor.setTrackedTrimDeg(lockedTrim);
+                    lastAnchor = qpcTicks();
+                }
+
+                // Safety watchdog (same rule as the windowed runs).
+                const uint64_t clipNow = processor.clipCount();
+                const uint64_t newClips = clipNow - lastClipTotal;
+                if (active && newClips > 5) {
+                    ++clipStrikeTicks;
+                } else {
+                    clipStrikeTicks = 0;
+                }
+                if (clipStrikeTicks >= 30) {
+                    std::printf("!! safety trip: sustained clipping, cancellation disabled\n");
+                    processor.setMode(Mode::Off);
+                    active = false;
+                    clipStrikeTicks = 0;
+                }
+                lastClipTotal = clipNow;
+
+                if (ticksToSeconds(qpcTicks() - lastPrint) > 2.0) {
+                    const double offAvg = offCount > 0 ? offSum / offCount : 0.0;
+                    const double onAvg = onCount > 0 ? onSum / onCount : 0.0;
+                    std::printf("  [%5.1fs] %s  level %6.1f dBFS", 
+                                ticksToSeconds(qpcTicks() - startedAt),
+                                active ? "ON " : "off",
+                                active ? onAvg : offAvg);
+                    if (active && offCount > 0 && onCount > 0) {
+                        std::printf("   (noise %5.1f dBFS -> cancelled %5.1f dBFS = %.1f dB)",
+                                    offAvg, onAvg, offAvg - onAvg);
+                    }
+                    std::printf("\n");
+                    std::fflush(stdout);
+                    lastPrint = qpcTicks();
+                }
+
+                reporter.tick(engine);
+                Sleep(80);
+            }
+            processor.setMode(Mode::Off);
+            Sleep(200);
+        } else if (driveCancel) {
             runWindow("warmup", Mode::DriveOnly, -1.0, warmupSeconds, 0.0, 0.0);
 
             if (sweepEnabled) {
