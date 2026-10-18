@@ -131,8 +131,11 @@ def analyze_loopback(args: argparse.Namespace) -> int:
             break
         # Search window: from just after emission to shortly before the next
         # chirp (the acoustic path is far shorter than the chirp interval).
+        # Search until shortly before the next chirp: this accommodates
+        # high-latency output paths (Bluetooth codecs can add 100-400 ms).
         lo = int(emit_index + 0.001 * rate)
-        hi = min(int(emit_index + 0.6 * rate), len(corr) - 1)
+        max_search = max(0.2, min(1.2, interval - 0.3))
+        hi = min(int(emit_index + max_search * rate), len(corr) - 1)
         if hi <= lo:
             continue
         window = corr[lo:hi]
@@ -185,6 +188,10 @@ def analyze_loopback(args: argparse.Namespace) -> int:
     print(f"  p95    : {np.percentile(delays, 95):8.2f} ms")
     print(f"  max    : {delays.max():8.2f} ms")
     print(f"  spread : {delays.max() - delays.min():8.2f} ms (platform jitter)")
+    if np.median(delays) > 100.0:
+        print("  note: delays above ~100 ms are dominated by output buffering")
+        print("        (Bluetooth codec); the software pipeline is ~26 ms on")
+        print("        this machine with wired output.")
     print(f"  wrote {csv_path}")
     if info.get("capture_resampled"):
         print("  note: capture stream was resampled; mapping is approximate.")

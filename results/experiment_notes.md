@@ -65,7 +65,9 @@ first, then earphones.
 ## Phase 2 - acoustic loopback latency (pending: needs earphones)
 
 Setup: earphones plugged, earphone held a few cm from the built-in mic,
-both steady for the whole run.
+both steady for the whole run. (First acoustic run 2026-10-18 uses the
+pTron TWS Bluetooth output: expect 100-400 ms codec-dominated delays and
+slightly larger jitter than a wired path.)
 
 ```powershell
 build\Release\audio_passthrough.exe --mode loopback ^

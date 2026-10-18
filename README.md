@@ -85,7 +85,9 @@ recording, maps sample indices to QPC seconds via the anchors, and reports
 the per-chirp delay (`results/loopback_latency_report.csv` + plot). A clean
 result is a tight cluster: median delay with a small spread (tens of
 microseconds of platform jitter). If detection is weak raise `--chirp-amp`
-(default 0.1); if it clips, lower it.
+(default 0.1); if it clips, lower it. The search window accommodates
+high-latency outputs - Bluetooth codecs add 100-400 ms, so delays well above
+100 ms mean codec buffering, not the software pipeline (which is ~26 ms here).
 
 ## Phase 3 - DSP sandbox and self-tests
 
@@ -108,7 +110,10 @@ requires primary-path delay >= secondary-path delay.
 A steady tone is the one case where a controller without a causal delay
 advantage can still win: the tone's amplitude/phase is predictable, so a
 frozen or slowly adapting quadrature canceller reaches a deep steady-state
-null. The `narrowband_experiment` tool drives a 200 Hz tone, sweeps the cancel
+null. This also makes it the experiment that works over Bluetooth output:
+the extra codec delay is just extra phase, which the sweep absorbs, while
+any wideband scheme is hopeless with a 100-400 ms output path.
+The `narrowband_experiment` tool drives a 200 Hz tone, sweeps the cancel
 phase to find the null, then alternates baseline/cancel windows.
 
 ```powershell
