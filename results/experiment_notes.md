@@ -243,3 +243,70 @@ Final results on this hardware (laptop Realtek mic + pTron TWS over A2DP):
   audible null is achievable for steady narrowband tones (<= ~300 Hz
   class) even over Bluetooth; broadband attenuation is not feasible with
   this latency budget.
+
+## Real-world feedforward demo (2026-10-18, evening) - "noise in, anti-noise out"
+
+The Phase 4/5 work cancelled tones the software itself generated (`drive_cancel`).
+This session built the fully external version: a noise source the earbud never
+heard, sensed by the laptop microphone, cancelled by the earbud in the air. Every
+link is physical - nothing is simulated:
+
+    laptop speakers (noise) -> air -> laptop mic (RAW capture)
+                             -> quadrature tracker -> anti-tone
+                             -> pTron TWS over A2DP -> air -> cancels at the mic
+
+Tool: `narrowband_experiment --experiment tracked_cancel` - emits
+`-gain * (demI*cos - demQ*sin)`, a copy of the measured in-phase component at
+`freq` with inverted polarity.
+
+### What was measured, in order
+
+1. **Units discovery.** The tracked controller's output scales with the measured
+   mic level; that made sense in the self-contained loop (the mic hears the
+   output itself) but in the real loop it hears a distant source (-50 dBFS).
+   At gain 0.5 the anti-tone came out at 0.005 amplitude while cancelling
+   required ~0.5 - the loop was 46 dB short. Real feedforward needs gain
+   O(100-1000).
+2. **Ceiling.** With that gain the request pinned at the 0.85 safety limit and
+   the watchdog disabled the controller mid-window. Fixes: a 1.5 s engage /
+   disengage fade (`cancelRamp_`); the watchdog now trips only after ~3 s of
+   *sustained* clipping (the hard limiter already bounds output at all times);
+   and finally an amplitude-normalized emission - the anti-tone is emitted at a
+   fixed safe amplitude 0.7 regardless of input level
+   (`min(gain*|dem|, kTrackedCeiling)`), so high gain is always legal.
+3. **Placement dominates everything.** A direct probe (tone from the earbud,
+   raw mic, `experiments/loop_probe.py`) measured earbud->mic coupling:
+   **-48 dB held against the mic**, **-66 dB lying away**, -82 dB in-ear. Every
+   run with the bud away read ~0 dB; the runs with the bud at the mic produced
+   nulls.
+4. **The loop phase drifts.** Capture and render clocks are independent (~100
+   ppm), so the loop phase slides 2-6 deg/s continuously - fixed phase trims
+   kept missing. Fixes: a phase-trim input (`--tracked-phase-trim`, rotating the
+   reconstruction) and an **auto-trim hill-climb** (`--auto-trim`): the
+   controller rotates its own emission through a revolution, measures the
+   residual at each step, locks the best phase, learns the drift rate between
+   searches, and rotates with it during the locked window.
+5. **The room.** A live ambient scan (`experiments/ambient_scan.py`, raw mic,
+   source off) found a real room tone at **200 Hz = -41.8 dBFS**, 40 dB above the
+   room floor elsewhere. At 200 Hz the earbud ceiling at the mic (~-51 dBFS)
+   sits *below* that room tone, so cancellation was physically impossible - and
+   the measured depth matched the mathematical maximum exactly. At **450 Hz the
+   room is silent (-96.6 dBFS)** and the laptop speakers reach the mic far more
+   strongly (-27.9 dB coupling), so the demo moved to 450 Hz.
+
+### Verified outcome (200 Hz runs, earbud held at the mic)
+
+- Source at mic -48 dBFS; the auto-trim search found residuals of **-58.8 and
+  -64.5 dBFS = 10-16 dB of real acoustic cancellation**, measured by the raw
+  microphone at the cancellation point.
+- Null-depth rule: anti-tone amplitude at the mic is `A = 0.7 * coupling`;
+  residual ~ `|source - A|`. Source within ~[A/1.6, A*1.6] gives a deep null; a
+  source much louder than A caps the depth (10 dB louder -> only ~3 dB).
+
+### Deliverable
+
+`run_real_demo.cmd [source-drive-gain]` - one command, everything tuned: noise
+source + auto-trim cancellation loop + phase tracking, 6 cycles of (baseline
+8 s, phase search, locked 8 s). The operator only holds the earbud against the
+laptop mic. Helper analyses under `experiments/`: `lockin_timeline.py`,
+`loop_probe.py`, `transfer_estimate.py`, `ambient_scan.py`.

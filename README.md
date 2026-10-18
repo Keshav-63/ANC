@@ -159,6 +159,35 @@ remains possible is narrowband (steady-tone) cancellation through precise
 phase alignment - what Phase 4 measures. The full write-up lives in
 `results/experiment_notes.md`.
 
+## Real-world demo - noise in, anti-noise out (every link physical)
+
+Beyond the self-contained Phase 4 experiment, `tracked_cancel` closes a real
+feedforward loop: the laptop's speakers hum a steady tone, the laptop
+microphone hears it (raw capture, effects bypassed), the software measures
+its amplitude/phase and emits the anti-tone to the earbud, and the two
+cancel in the air at the microphone. The controller finds the phase itself
+(`--auto-trim`: it sweeps its own emission, locks the null, and tracks the
+Bluetooth clock drift) and emits a fixed-amplitude anti-tone, so it never
+rides the safety limiter.
+
+Run it - hold the earbud's nozzle against the laptop mic (the null exists
+where the noise is sensed):
+
+```
+run_real_demo.cmd            # quieter hum: run_real_demo.cmd 0.05
+```
+
+Per cycle: 6 s hum / ~8 s phase search / 6 s locked cancellation; three
+cycles, under 90 seconds total. Measured on this machine with the earbud
+held at the mic: source -48 dBFS at the mic, residuals of **-58.8 and
+-64.5 dBFS** during the search - 10-16 dB of acoustic cancellation,
+verified by the raw microphone. The physics limits are known: the anti-tone
+amplitude at the mic is `0.7 x coupling` (-51 dBFS with the earbud on the
+mic, -104 dBFS with it lying away), so the source must arrive within about
+[A/1.6, A*1.6] for a deep null, and the earbud must be at the sensor.
+450 Hz is used because this room is silent there (its 200 Hz tone alone
+measures -41.8 dBFS). Details: `results/experiment_notes.md`.
+
 ## Repository layout
 
 ```

@@ -41,6 +41,11 @@ public:
     void setDriveGain(float linear) { driveGain_.store(linear, std::memory_order_relaxed); }
     void setCancelGain(float linear) { cancelGain_.store(linear, std::memory_order_relaxed); }
     void setCancelPhaseDeg(double deg) { cancelPhaseDeg_.store(deg, std::memory_order_relaxed); }
+
+    // Phase trim (degrees) applied to the tracked-cancel emission so the
+    // anti-tone lands acoustically out of phase at the error microphone
+    // (measured empirically with the loop probe).
+    void setTrackedTrimDeg(double deg) { trackedTrimDeg_.store(deg, std::memory_order_relaxed); }
     void setTrackerBandwidthHz(double hz) {
         trackerBandwidthHz_.store(hz, std::memory_order_relaxed);
         trackerCoeffDirty_.store(true, std::memory_order_relaxed);
@@ -60,6 +65,7 @@ private:
     std::atomic<float> driveGain_{0.0f};
     std::atomic<float> cancelGain_{0.0f};
     std::atomic<double> cancelPhaseDeg_{180.0};
+    std::atomic<double> trackedTrimDeg_{0.0};
     std::atomic<double> trackerBandwidthHz_{2.0};
     std::atomic<bool> trackerCoeffDirty_{true};
 
@@ -76,6 +82,8 @@ private:
     double trackerCoeff_ = 0.0;
     double demI_ = 0.0;
     double demQ_ = 0.0;
+    double cancelRamp_ = 0.0;      // engage/disengage fade for TrackedCancel
+    double cancelRampStep_ = 0.0;  // 1 / (fade seconds * sampleRate)
 };
 
 }  // namespace anc

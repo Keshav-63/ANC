@@ -89,6 +89,9 @@ int wmain(int argc, wchar_t** argv) {
     const double sweepWindowSeconds = args.getDouble(L"--sweep-window", 3.0);
     const double warmupSeconds = args.getDouble(L"--warmup", 2.0);
     const double initialPhaseDeg = args.getDouble(L"--cancel-phase", 180.0);
+    const double trackedTrimDeg = args.getDouble(L"--tracked-phase-trim", 0.0);
+    const bool trimSweep = args.has(L"--trim-sweep");
+    const bool autoTrim = args.has(L"--auto-trim");
 
     const bool driveCancel = experiment == L"drive_cancel";
 
@@ -121,6 +124,7 @@ int wmain(int argc, wchar_t** argv) {
     processor.setFrequency(frequency);
     processor.setDriveGain(driveGain);
     processor.setCancelGain(cancelGain);
+    processor.setTrackedTrimDeg(trackedTrimDeg);
 
     DuplexEngine engine;
     try {
@@ -153,11 +157,13 @@ int wmain(int argc, wchar_t** argv) {
         const int64_t t0 = qpcTicks();
         int windowIndex = 0;
         uint64_t lastClipTotal = 0;
+        int clipStrikeTicks = 0;
         bool tripped = false;
 
         // --- window runner -------------------------------------------------
         auto runWindow = [&](const std::string& label, Mode mode, double phaseDeg,
-                             double seconds) -> WindowResult {
+                             double seconds, double trimBaseDeg,
+                             double trimRateDegPerSec) -> WindowResult {
             WindowResult result;
             result.label = label;
             result.cancelPhaseDeg = phaseDeg;
@@ -181,14 +187,33 @@ int wmain(int argc, wchar_t** argv) {
                 peak = std::max(peak, processor.lastOutputPeak());
                 ++samples;
 
-                // Safety watchdog: repeated clipping while emitting cancels.
+                // Phase-drift tracking: rotate the tracked emission at the
+                // learned rate (deg/s) so the acoustic null stays aligned as
+                // the capture/render clocks drift relative to each other.
+                if (trimRateDegPerSec != 0.0) {
+                    processor.setTrackedTrimDeg(
+                        trimBaseDeg + trimRateDegPerSec * ticksToSeconds(qpcTicks() - windowStart));
+                }
+
+                // Safety watchdog: only sustained clipping trips. The hard
+                // limiter already bounds the output at all times (the earphone
+                // cannot see more than the ceiling), so riding the ceiling is
+                // harmless for safety; a trip only makes sense if the loop is
+                // stuck against the limiter for ~3 s straight, which means
+                // the gain is beyond what the driver can carry at all.
                 const uint64_t clipNow = processor.clipCount();
-                if (mode != Mode::Off && mode != Mode::DriveOnly &&
-                    clipNow - lastClipTotal > 5) {
+                const uint64_t newClips = clipNow - lastClipTotal;
+                if (mode != Mode::Off && mode != Mode::DriveOnly && newClips > 5) {
+                    ++clipStrikeTicks;
+                } else {
+                    clipStrikeTicks = 0;
+                }
+                if (clipStrikeTicks >= 30) {
                     tripped = true;
                     result.tripped = true;
                     processor.setMode(Mode::Off);
-                    std::printf("!! safety trip: clipping detected, controller disabled\n");
+                    std::printf("!! safety trip: sustained clipping, controller disabled\n");
+                    clipStrikeTicks = 0;
                 }
                 lastClipTotal = clipNow;
                 reporter.tick(engine);
@@ -217,7 +242,7 @@ int wmain(int argc, wchar_t** argv) {
         // --- run the schedule ----------------------------------------------
         double bestPhase = initialPhaseDeg;
         if (driveCancel) {
-            runWindow("warmup", Mode::DriveOnly, -1.0, warmupSeconds);
+            runWindow("warmup", Mode::DriveOnly, -1.0, warmupSeconds, 0.0, 0.0);
 
             if (sweepEnabled) {
                 std::printf("phase sweep (%.0f deg steps, %.1f s per step)...\n", sweepStepDeg,
@@ -226,7 +251,7 @@ int wmain(int argc, wchar_t** argv) {
                 for (double phi = 0.0; phi < 360.0; phi += sweepStepDeg) {
                     const WindowResult r =
                         runWindow("sweep_" + std::to_string(static_cast<int>(phi)),
-                                  Mode::DriveCancel, phi, sweepWindowSeconds);
+                                  Mode::DriveCancel, phi, sweepWindowSeconds, 0.0, 0.0);
                     if (!r.tripped && r.residualMag < best) {
                         best = r.residualMag;
                         bestPhase = phi;
@@ -239,9 +264,10 @@ int wmain(int argc, wchar_t** argv) {
 
             std::vector<WindowResult> baselines, cancels;
             for (int cycle = 0; cycle < cycles && !g_stop.load(); ++cycle) {
-                baselines.push_back(runWindow("baseline", Mode::DriveOnly, -1.0, windowSeconds));
+                baselines.push_back(
+                    runWindow("baseline", Mode::DriveOnly, -1.0, windowSeconds, 0.0, 0.0));
                 cancels.push_back(
-                    runWindow("cancel", Mode::DriveCancel, bestPhase, windowSeconds));
+                    runWindow("cancel", Mode::DriveCancel, bestPhase, windowSeconds, 0.0, 0.0));
             }
 
             if (!baselines.empty() || !cancels.empty()) {
@@ -257,11 +283,72 @@ int wmain(int argc, wchar_t** argv) {
                             "      microphone position only (see project plan section 4/5).\n");
             }
         } else {
-            runWindow("warmup", Mode::Off, -1.0, warmupSeconds);
+            runWindow("warmup", Mode::Off, -1.0, warmupSeconds, 0.0, 0.0);
+            static const double kTrimOffsets[4] = {-67.5, -22.5, 22.5, 67.5};
             std::vector<WindowResult> baselines, cancels;
+            double lockedTrim = trackedTrimDeg;
+            double trimRate = 0.0;   // deg/s, learned from phase re-anchorings
+            double anchorTrim = 0.0;
+            double anchorTime = 0.0;
+            bool haveAnchor = false;
             for (int cycle = 0; cycle < cycles && !g_stop.load(); ++cycle) {
-                baselines.push_back(runWindow("baseline", Mode::Off, -1.0, windowSeconds));
-                cancels.push_back(runWindow("cancel", Mode::TrackedCancel, -1.0, windowSeconds));
+                baselines.push_back(runWindow("baseline", Mode::Off, -1.0, windowSeconds, 0.0, 0.0));
+                if (autoTrim) {
+                    // Phase hill-climb with drift tracking. The loop delay
+                    // drifts slowly (the capture and render clocks are
+                    // independent, ~100 ppm apart), so after the first
+                    // full-revolution acquisition the search only covers a
+                    // narrow window around the predicted phase, and the
+                    // learned drift rate rotates the emission during the
+                    // locked cancel window to hold the null. The residual
+                    // readout updates every ~10 ms, so a few hundred ms per
+                    // step suffices.
+                    const double now = ticksToSeconds(qpcTicks() - t0);
+                    const double center =
+                        haveAnchor ? anchorTrim + trimRate * (now - anchorTime) : lockedTrim;
+                    const int steps = haveAnchor ? 21 : 48;  // ~6-7 deg per step at 300-500 Hz
+                    const double span = haveAnchor ? 120.0 : 360.0;
+                    processor.setMode(Mode::TrackedCancel);
+                    processor.setTrackedTrimDeg(center);
+                    Sleep(1800);  // let the engage fade finish
+                    double bestResidual = 1e30;
+                    double bestPhase = center;
+                    for (int step = 0; step < steps && !g_stop.load(); ++step) {
+                        const double phase = center + span * step / steps;
+                        processor.setTrackedTrimDeg(phase);
+                        Sleep(300);
+                        const double r = processor.residualDbfs();
+                        if (r < bestResidual) {
+                            bestResidual = r;
+                            bestPhase = phase;
+                        }
+                    }
+                    const double after = ticksToSeconds(qpcTicks() - t0);
+                    if (haveAnchor) {
+                        const double dt = after - anchorTime;
+                        const double dPhase = bestPhase - anchorTrim;
+                        if (dt > 5.0 && std::fabs(dPhase) < 180.0) {
+                            trimRate = 0.5 * trimRate + 0.5 * (dPhase / dt);
+                        }
+                    }
+                    lockedTrim = bestPhase;
+                    anchorTrim = bestPhase;
+                    anchorTime = after;
+                    haveAnchor = true;
+                    processor.setTrackedTrimDeg(lockedTrim);
+                    processor.setMode(Mode::Off);
+                    std::printf("   auto-trim: phase %+.0f deg, drift %+.1f deg/s "
+                                "(cal residual %.2f dBFS)\n",
+                                lockedTrim, trimRate, bestResidual);
+                    Sleep(400);
+                } else {
+                    const double trim =
+                        trimSweep ? trackedTrimDeg + kTrimOffsets[cycle % 4] : trackedTrimDeg;
+                    processor.setTrackedTrimDeg(trim);
+                    if (trimSweep) std::printf("   (phase trim %+.0f deg)\n", trim);
+                }
+                cancels.push_back(runWindow("cancel", Mode::TrackedCancel, -1.0, windowSeconds,
+                                             lockedTrim, autoTrim ? trimRate : 0.0));
             }
             double bSum = 0.0, cSum = 0.0;
             for (const auto& r : baselines) bSum += r.residualDbfs;
