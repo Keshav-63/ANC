@@ -310,3 +310,35 @@ source + auto-trim cancellation loop + phase tracking, 6 cycles of (baseline
 8 s, phase search, locked 8 s). The operator only holds the earbud against the
 laptop mic. Helper analyses under `experiments/`: `lockin_timeline.py`,
 `loop_probe.py`, `transfer_estimate.py`, `ambient_scan.py`.
+
+### In-ear variant (buds worn, cancelled at the eardrum) - 2026-10-18
+
+Same controller, but the actuator is worn in the ear and the null is at the
+eardrum while the sensor stays at the laptop microphone. Physics: same loop,
+different error path (ear canal instead of mic spot), so the loop still
+nulls at the mic while the ear sees `source - A` with A the earbud's level
+at the eardrum - the depth is set by the ear path, which the laptop mic
+cannot measure. Tuning therefore became human-in-the-loop, with the operator
+listening:
+
+1. **Level.** With the anti-tone at 0.7 (ceiling) the ear reports "louder";
+   at 0.15 / 0.05 / 0.015 the hum reports "dropped". Working point: emission
+   ~0.05, i.e. `--cancel-gain 2.5` (the emission equals gain x measured mic
+   level, so the mic level sets it).
+2. **Phase structure.** Sweeping 0/90/180/270 deg: quiet at 0 and 180, loud
+   at 90 and 270 - a 180-deg period, which means the earbud driver inverts
+   phase at 450 Hz; the nulls sit near 0 and 180 deg. A refinement at
+   -22.5/-7.5/+7.5/+22.5 deg was inconclusive by ear, as expected (8-deg
+   steps are below human phase discrimination).
+3. **Locked run** (phase 0, level 0.05, 12 s hum / 12 s cancelled x3):
+   the operator reports the hum audibly present when the system is off and
+   quiet while it is on - the cancellation is felt live in the earbud.
+4. **A loud-gain failure mode worth remembering:** every earlier "I cannot
+   hear any anti-tone" report was the Windows volume for the
+   "Headphones (pTron)" endpoint sitting low, not the DSP. With the endpoint
+   at 100% the full-level test tone is clearly audible.
+
+Honest limit: unlike the at-the-microphone null (measured 10-16 dB), the
+in-ear depth cannot be quantified with the tools in this repository - it is
+a perceptual result, and it depends on the ear path staying fixed (no head
+movement, consistent tip seal).

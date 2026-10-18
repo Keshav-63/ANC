@@ -92,6 +92,7 @@ int wmain(int argc, wchar_t** argv) {
     const double trackedTrimDeg = args.getDouble(L"--tracked-phase-trim", 0.0);
     const bool trimSweep = args.has(L"--trim-sweep");
     const bool autoTrim = args.has(L"--auto-trim");
+    const double trimRateFlag = args.getDouble(L"--trim-rate", 0.0);
 
     const bool driveCancel = experiment == L"drive_cancel";
 
@@ -284,7 +285,7 @@ int wmain(int argc, wchar_t** argv) {
             }
         } else {
             runWindow("warmup", Mode::Off, -1.0, warmupSeconds, 0.0, 0.0);
-            static const double kTrimOffsets[4] = {-67.5, -22.5, 22.5, 67.5};
+            static const double kTrimOffsets[4] = {-22.5, -7.5, 7.5, 22.5};
             std::vector<WindowResult> baselines, cancels;
             double lockedTrim = trackedTrimDeg;
             double trimRate = 0.0;   // deg/s, learned from phase re-anchorings
@@ -348,7 +349,9 @@ int wmain(int argc, wchar_t** argv) {
                     if (trimSweep) std::printf("   (phase trim %+.0f deg)\n", trim);
                 }
                 cancels.push_back(runWindow("cancel", Mode::TrackedCancel, -1.0, windowSeconds,
-                                             lockedTrim, autoTrim ? trimRate : 0.0));
+                                             lockedTrim,
+                                             trimRateFlag != 0.0 ? trimRateFlag
+                                                                  : (autoTrim ? trimRate : 0.0)));
             }
             double bSum = 0.0, cSum = 0.0;
             for (const auto& r : baselines) bSum += r.residualDbfs;
